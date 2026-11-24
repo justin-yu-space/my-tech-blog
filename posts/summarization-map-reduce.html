@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <base href="../" />
+  <title>180 份日报汇总成一页月报：refine 跑了 9 分钟，层级 map-reduce 只要 63 秒 · JIE 的技术博客</title>
+  <meta name="description" content="同一批 11.2 万字，map-reduce 快但把量产异常压成一句「略有波动」，refine 连贯却要等九分钟。顺着业务结构做层级归约后，关键事件保留率从 3/8 提到 8/8。" />
+  <link rel="canonical" href="https://justin-yu-space.github.io/my-tech-blog/posts/summarization-map-reduce.html" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="JIE 的技术博客" />
+  <meta property="og:title" content="180 份日报汇总成一页月报：refine 跑了 9 分钟，层级 map-reduce 只要 63 秒 · JIE 的技术博客" />
+  <meta property="og:description" content="同一批 11.2 万字，map-reduce 快但把量产异常压成一句「略有波动」，refine 连贯却要等九分钟。顺着业务结构做层级归约后，关键事件保留率从 3/8 提到 8/8。" />
+  <meta property="og:url" content="https://justin-yu-space.github.io/my-tech-blog/posts/summarization-map-reduce.html" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="theme-color" content="#a8435f" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <script>(function(){var t="light";try{var d=matchMedia("(prefers-color-scheme: dark)").matches;t=localStorage.getItem("theme-v2")||(d?"dark":"light")}catch(e){}document.documentElement.dataset.theme=t})();</script>
+  <script>(function(){try{if(sessionStorage.getItem("jie-dissolve")==="1"){sessionStorage.removeItem("jie-dissolve");document.documentElement.classList.add("pre-dissolve")}}catch(e){}})();</script>
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body data-page="post">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <div id="site-header"><header class="site-header"><div class="container nav-inner"><a href="index.html" class="brand" aria-label="JIE 的技术博客 首页"><span class="brand-full">JIE 的技术博客</span><span class="brand-short">JIE</span></a><nav class="nav-links" aria-label="主导航"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a></nav><div class="nav-actions"><button type="button" class="icon-btn search-trigger" data-search-open aria-label="搜索文章">🔍</button><button type="button" class="icon-btn theme-trigger" data-theme-toggle aria-label="切换深浅主题">◐</button><button type="button" class="icon-btn menu-trigger" data-menu-toggle aria-label="打开菜单" aria-expanded="false">☰</button></div></div><div class="mobile-menu" id="mobile-menu"><div class="container" style="padding-bottom:16px"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="#" data-search-open>搜索文章</a><a href="#" data-theme-toggle>切换深浅主题</a></div></div></header></div>
+  <main id="main"><div class="article-shell"><article class="article"><p class="label-mono accent">// 技术分享</p><h1>180 份日报汇总成一页月报：refine 跑了 9 分钟，层级 map-reduce 只要 63 秒</h1><div class="article-meta"><time datetime="2026-11-24">2026年11月24日</time><span>·</span><span>约 9 分钟</span><a class="tag" href="tags.html?tag=AI">#AI</a><a class="tag" href="tags.html?tag=%E6%91%98%E8%A6%81%E7%AD%96%E7%95%A5">#摘要策略</a><a class="tag" href="tags.html?tag=%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0">#学习笔记</a></div><details class="toc-inline"><summary>本文目录</summary><ul class="toc-list"><li><a href="posts/summarization-map-reduce.html#sec-0" data-toc="sec-0">三种策略，我一开始只会一种</a></li><li><a href="posts/summarization-map-reduce.html#sec-1" data-toc="sec-1">map-reduce：快是真的快，丢也是真的丢</a></li><li><a href="posts/summarization-map-reduce.html#sec-2" data-toc="sec-2">refine：质量好一点，但 9 分钟谁受得了</a></li><li><a href="posts/summarization-map-reduce.html#sec-3" data-toc="sec-3">折中方案：先按周归约，再汇总成月</a></li><li><a href="posts/summarization-map-reduce.html#sec-4" data-toc="sec-4">踩过的坑</a></li><li><a href="posts/summarization-map-reduce.html#sec-5" data-toc="sec-5">结论</a></li></ul></details><div class="article-body">
+        <p>工作日报系统有个「月度总结」功能：把一个部门一个月的所有日报汇总成一份。上线后我一直不满意——周报还行，一到月度就变成一堆正确的废话，「本月各项工作有序推进」这种句子能出现七八次。我把 180 份日报（约 11.2 万字）丢给模型让它「总结成月度报告」，结果关键的那次量产异常被压得只剩一句「部分环节存在问题」。这不是模型不行，是我用错了摘要策略。我花了两天把三种长文摘要方案各跑了一遍，最后落到一个层级方案上。</p>
+        <h2 id="sec-0" tabindex="-1">三种策略，我一开始只会一种</h2>
+        <p>我最早只会最笨的一种：把全部文本塞进一次调用。11.2 万字中文约合 16 万 token，别说 32k 窗口，就算分段喂进去，模型也会在长上下文里「迷失中间」——开头和结尾记得清楚，中间那批日报几乎不进输出。查资料后我才知道，长文摘要有三条成熟路线：<strong>map-reduce</strong>（先分块各自总结，再汇总）、<strong>refine</strong>（逐块滚动改写，每次带上之前的摘要）、<strong>hierarchical</strong>（分层归约，逐层压缩）。名字看着简单，真跑起来差别巨大。</p>
+        <h2 id="sec-1" tabindex="-1">map-reduce：快是真的快，丢也是真的丢</h2>
+        <p>map-reduce 的思路是每个 chunk 独立总结，再把所有小摘要拼起来做一次 reduce。我把 180 份日报按人按周切成 180 个块，并发 8 路调用（再高就触发 429），每块压成 120 字，耗时约 48 秒。但 reduce 那一步出了问题：180 条摘要拼起来约 2.16 万字，一次塞给 8k 上下文的小模型直接报 <code>context length exceeded</code>；换成 32k 模型后虽然不报错，输出却严重「平均化」——那次持续三天的量产异常（原本在 11 份日报里反复提到）只换来一句「生产略有波动」。</p>
+        <pre><code>def map_reduce(docs, llm, map_prompt, reduce_prompt):
+    # 1) map：每块独立压缩，并发受下游限流约束
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        summaries = list(pool.map(
+            lambda d: llm(map_prompt + d, max_tokens=300), docs))
+
+    # 2) reduce：小摘要太多时，分批再归约，别一次塞满
+    while sum(len(s) for s in summaries) &gt; 12000:
+        summaries = [llm(reduce_prompt + "\n".join(batch))
+                     for batch in chunks(summaries, 12)]
+    return llm(reduce_prompt + "\n".join(summaries))</code></pre>
+        <p>「分批再归约」这个 while 循环是我第二天才加的。第一版直接一次 reduce，才有了上面那个 429 和平均化。</p>
+        <h2 id="sec-2" tabindex="-1">refine：质量好一点，但 9 分钟谁受得了</h2>
+        <p>refine 是拿上一轮的摘要当上下文，和下一个 chunk 一起再改一版。好处是后面的块能「记得」前面的结论，不会像 map-reduce 那样各说各话。代价是彻底串行：180 步一步不能少，而且每步的输入是「累计摘要 + 新块」，摘要越滚越长。我实测单步耗时从第一步的 1.4 秒涨到最后一步的 6.8 秒，整轮跑了 9 分 12 秒，token 消耗 4.7 万，是 map-reduce 的 2.6 倍。对用户来说，点一下「生成」等九分钟，等于这个功能不存在。</p>
+        <h2 id="sec-3" tabindex="-1">折中方案：先按周归约，再汇总成月</h2>
+        <p>最后我用了层级结构，本质是带业务语义的 map-reduce：先按周把 45 份日报归约成 4 份周摘要，再把 4 份周摘要合并成月度报告。关键在于<strong>归约的分组要顺着业务结构切</strong>，不能随机分块——同一周的日报本来就在讲同一批项目，放一起归约时模型看到的是连续叙事，跨周的重要事件（比如那次量产异常）反而会在第二次归约时因为被多周提及而自动凸显。</p>
+        <pre><code>def hierarchical_monthly(daily_reports, llm):
+    by_week = group_by_iso_week(daily_reports)   # 4 周，每周 ~45 份
+    weekly = []
+    for week, reports in by_week.items():
+        weekly.append({
+            "week": week,
+            "digest": reduce_with_focus(llm, reports,
+                      focus="只保留：项目进展、异常事件、待决策事项")
+        })
+    # 第二层：4 份周摘要 -> 1 份月报，保留周次标记
+    return llm(MONTHLY_PROMPT + "\n".join(
+        w["week"] + ": " + w["digest"] for w in weekly))</code></pre>
+        <p>其中 <code>reduce_with_focus</code> 的 focus 提示是另一个收获：与其让模型「总结全部」，不如明确告诉它只留哪三类信息。加上这句后，「有序推进」这类套话基本消失，异常事件的保留率从 3/8 提到 8/8（我用 8 个已知关键事件做的核对表）。总耗时 63 秒，比 refine 快了近 9 倍，token 降到 2.1 万。</p>
+        <h2 id="sec-4" tabindex="-1">踩过的坑</h2>
+        <p>坑一：表格被切碎。日报里有工时表格，按字符数切块会把行列拆到两个块，汇总出来的数字对不上。改成按「日报」这个天然边界切（一份日报就是一个 map 单元），问题消失。坑二：map 阶段的 <code>max_tokens</code> 设太小（我一开始给 150），摘要被硬截断，后半句的结论丢了，提到 300 后虽然浪费一点但信息完整。坑三：reduce prompt 里没写「保留数字」，模型把「良率 92.3%」改成了「良率较高」——摘要里所有精确数字都被模糊化。后来我在 prompt 里加了一条硬规则：<strong>出现的数字原样保留，不改写、不省略</strong>。</p>
+        <h2 id="sec-5" tabindex="-1">结论</h2>
+        <p>没有最好的摘要策略，只有匹配文档结构的策略。<strong>map-reduce 胜在快，refine 胜在连贯，层级归约胜在你把业务结构注进了切分方式</strong>。对我这个场景——文档本来就按人、按天、按周组织——顺着这个结构做层级归约，既拿到接近 refine 的连贯性，又保住 map-reduce 的速度。现在我的默认选择是：先看文档有没有天然的层级，有就用层级归约；没有再退回 map-reduce；refine 只留给那些必须逐字精读的极短文档集。</p>
+      </div><nav class="article-nav"><a class="post-nav-item" href="finetune-or-fewshot.html"><span>更旧一篇 →</span><strong>为了抽工艺参数我差点微调 7B：8 个 few-shot 样本把完整率从 71% 拉到 92%</strong></a></nav><div class="article-nav"><a class="back-link" href="../blog.html">← 返回全部文章</a></div><section class="related-posts"><h2> related / 相关阅读</h2><div class="related-grid"><a href="finetune-or-fewshot.html"><span>2026年11月24日</span><strong>为了抽工艺参数我差点微调 7B：8 个 few-shot 样本把完整率从 71% 拉到 92%</strong></a><a href="token-billing-dashboard.html"><span>2026年11月23日</span><strong>一个月 1200 块的 AI 账单我全靠猜：装了 token 计费看板，当月降了 38%</strong></a><a href="model-router-ratelimit.html"><span>2026年11月23日</span><strong>主模型半夜返回 429，我的 AI 摘要全线崩了：加了模型路由 + 退避后可用性到 99.7%</strong></a></div></section></article><aside class="toc toc-side" id="toc-side" aria-label="文章目录"><p class="toc-title">目录 / CONTENTS</p><ul class="toc-list"><li><a href="posts/summarization-map-reduce.html#sec-0" data-toc="sec-0">三种策略，我一开始只会一种</a></li><li><a href="posts/summarization-map-reduce.html#sec-1" data-toc="sec-1">map-reduce：快是真的快，丢也是真的丢</a></li><li><a href="posts/summarization-map-reduce.html#sec-2" data-toc="sec-2">refine：质量好一点，但 9 分钟谁受得了</a></li><li><a href="posts/summarization-map-reduce.html#sec-3" data-toc="sec-3">折中方案：先按周归约，再汇总成月</a></li><li><a href="posts/summarization-map-reduce.html#sec-4" data-toc="sec-4">踩过的坑</a></li><li><a href="posts/summarization-map-reduce.html#sec-5" data-toc="sec-5">结论</a></li></ul></aside></div></main>
+  <div id="site-footer"><footer class="site-footer"><div class="container footer-inner"><p>© 2026 JIE · 由原生 HTML/CSS/JS 强力驱动</p><div class="footer-links"><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="https://github.com/justin-yu-space" target="_blank" rel="noopener">GitHub</a><a href="feed.xml">RSS</a><button type="button" data-search-open>搜索</button></div></div></footer></div>
+  <div id="search-root"></div>
+  <script src="assets/data/site.js"></script>
+  <script src="assets/data/text.js"></script>
+  <script src="assets/js/components.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>

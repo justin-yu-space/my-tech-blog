@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <base href="../" />
+  <title>把 Prompt 从代码里搬出来后，我第一次能回答「上周那批摘要到底是谁生成的」 · JIE 的技术博客</title>
+  <meta name="description" content="Prompt 只是三行字符串常量时，改一个字全站输出都变，出了事查不到是谁改的、改的哪版。搬进带版本号的注册表后，回滚只需要改一个数字。" />
+  <link rel="canonical" href="https://justin-yu-space.github.io/my-tech-blog/posts/prompt-version-registry.html" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="JIE 的技术博客" />
+  <meta property="og:title" content="把 Prompt 从代码里搬出来后，我第一次能回答「上周那批摘要到底是谁生成的」 · JIE 的技术博客" />
+  <meta property="og:description" content="Prompt 只是三行字符串常量时，改一个字全站输出都变，出了事查不到是谁改的、改的哪版。搬进带版本号的注册表后，回滚只需要改一个数字。" />
+  <meta property="og:url" content="https://justin-yu-space.github.io/my-tech-blog/posts/prompt-version-registry.html" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="theme-color" content="#a8435f" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <script>(function(){var t="light";try{var d=matchMedia("(prefers-color-scheme: dark)").matches;t=localStorage.getItem("theme-v2")||(d?"dark":"light")}catch(e){}document.documentElement.dataset.theme=t})();</script>
+  <script>(function(){try{if(sessionStorage.getItem("jie-dissolve")==="1"){sessionStorage.removeItem("jie-dissolve");document.documentElement.classList.add("pre-dissolve")}}catch(e){}})();</script>
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body data-page="post">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <div id="site-header"><header class="site-header"><div class="container nav-inner"><a href="index.html" class="brand" aria-label="JIE 的技术博客 首页"><span class="brand-full">JIE 的技术博客</span><span class="brand-short">JIE</span></a><nav class="nav-links" aria-label="主导航"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a></nav><div class="nav-actions"><button type="button" class="icon-btn search-trigger" data-search-open aria-label="搜索文章">🔍</button><button type="button" class="icon-btn theme-trigger" data-theme-toggle aria-label="切换深浅主题">◐</button><button type="button" class="icon-btn menu-trigger" data-menu-toggle aria-label="打开菜单" aria-expanded="false">☰</button></div></div><div class="mobile-menu" id="mobile-menu"><div class="container" style="padding-bottom:16px"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="#" data-search-open>搜索文章</a><a href="#" data-theme-toggle>切换深浅主题</a></div></div></header></div>
+  <main id="main"><div class="article-shell"><article class="article"><p class="label-mono accent">// 技术分享</p><h1>把 Prompt 从代码里搬出来后，我第一次能回答「上周那批摘要到底是谁生成的」</h1><div class="article-meta"><time datetime="2026-11-23">2026年11月23日</time><span>·</span><span>约 8 分钟</span><a class="tag" href="tags.html?tag=AI">#AI</a><a class="tag" href="tags.html?tag=Prompt">#Prompt</a><a class="tag" href="tags.html?tag=%E5%AE%9E%E8%B7%B5">#实践</a></div><details class="toc-inline"><summary>本文目录</summary><ul class="toc-list"><li><a href="posts/prompt-version-registry.html#sec-0" data-toc="sec-0">事故现场：一句「请简洁一点」，200 份摘要全变样</a></li><li><a href="posts/prompt-version-registry.html#sec-1" data-toc="sec-1">拆出来：一个 prompt 一个文件，版本号写在文件名里</a></li><li><a href="posts/prompt-version-registry.html#sec-2" data-toc="sec-2">三件事必须落到库里：prompt 版本、模型、参数</a></li><li><a href="posts/prompt-version-registry.html#sec-3" data-toc="sec-3">坑一：缓存 key 里没带版本号，回滚后命中的还是坏结果</a></li><li><a href="posts/prompt-version-registry.html#sec-4" data-toc="sec-4">坑二：灰度 10% 看不出差异，因为没有对照组</a></li><li><a href="posts/prompt-version-registry.html#sec-5" data-toc="sec-5">坑三：模板变量漂移，模型自己把缺失的字段编了出来</a></li><li><a href="posts/prompt-version-registry.html#sec-6" data-toc="sec-6">结论</a></li></ul></details><div class="article-body">
+        <p>NPI 系统里有个功能：读工艺卡文本，生成结构化的工序摘要，给项目概览页用。上线两个月相安无事，直到某天有人问「为什么这周的摘要都变得特别短，关键参数都没了」。我去翻代码，发现三天前我自己为了「让输出更简洁」，在 prompt 末尾加了一句「请简洁一点」。改的时候觉得无所谓，出问题时才发现：这个 prompt 是硬编码在 Python 里的一个三行字符串，没有版本号、没有变更记录、也没法只对一部分请求回滚。那次之后我把它搬进了版本注册表。</p>
+        <h2 id="sec-0" tabindex="-1">事故现场：一句「请简洁一点」，200 份摘要全变样</h2>
+        <p>那句「请简洁一点」的杀伤力超出预期。模型把「简洁」理解成「删掉所有列举项」，结果 <code>key_params</code> 字段从平均 4.2 项变成 0.8 项，<code>risks</code> 有一半直接返回空数组。更尴尬的是排查过程：我知道输出变了，但不知道从哪天开始变、影响了多少条、改之前长什么样——因为旧 prompt 已经被覆盖，只在 git 里留了一个 diff，而生产环境的调用参数（模型、temperature）压根没记录。</p>
+        <h2 id="sec-1" tabindex="-1">拆出来：一个 prompt 一个文件，版本号写在文件名里</h2>
+        <p>我把所有 prompt 挪到 <code>prompts/</code> 目录，命名规则是 <code>{id}.v{n}.md</code>，文件头用 front-matter 记元信息，正文是模板。这样「当前用哪版」变成一个显式的配置项，而不是散落在代码里的字符串。</p>
+        <pre><code># prompts/summary_card.v3.md
+---
+id: summary_card
+version: 3
+model: qwen-plus
+temperature: 0.2
+updated: 2026-11-21
+note: 补回 key_params 列举要求，禁止模型自行省略
+---
+你是工艺工程师助手。请阅读下面的工艺卡文本，输出 JSON：
+{"process": "...", "key_params": ["..."], "risks": ["..."]}
+
+要求：key_params 至少列出 3 项，若原文没有明确参数则填 ["未标注"]，
+不允许返回空数组。只输出 JSON，不要任何解释。
+
+# registry.py
+import hashlib, yaml
+
+def load(prompt_id, version):
+    path = "prompts/" + prompt_id + ".v" + str(version) + ".md"
+    raw = open(path, encoding="utf-8").read()
+    head, body = raw.split("---", 2)[1:]
+    meta = yaml.safe_load(head)
+    meta["sha8"] = hashlib.sha256(body.encode()).hexdigest()[:8]
+    meta["body"] = body.strip()
+    return meta</code></pre>
+        <h2 id="sec-2" tabindex="-1">三件事必须落到库里：prompt 版本、模型、参数</h2>
+        <p>光有文件不够，关键是调用时把「这次用了什么」写进业务库。我在 <code>audit_log</code> 里加了三个字段：<code>prompt_id</code>、<code>prompt_version</code>、<code>prompt_sha8</code>，再带上 <code>model</code> 和 <code>temperature</code>。这一步做起来只有十几行代码，但它让「上周那批摘要谁生成的」从不可回答变成了一个 SQL 查询。我甚至不用查 git——直接按 <code>sha8</code> 分组，就能看出哪一批输出是同一次生成逻辑的产物。</p>
+        <h2 id="sec-3" tabindex="-1">坑一：缓存 key 里没带版本号，回滚后命中的还是坏结果</h2>
+        <p>发现摘要变短后我立刻把版本从 v3 回滚到 v2，重启服务，重新生成——结果输出还是短的。原因是我之前给摘要做了结果缓存，key 是「文件哈希 + 模型名」，没有 prompt 版本。于是所有请求都精准命中了三天前缓存下来的坏结果。<strong>Prompt 版本必须进缓存 key，它是生成逻辑的一部分，跟模型名同级。</strong>改成 <code>hash(file) + model + prompt_sha8</code> 之后，回滚立刻生效，旧缓存自然失效，不需要手动清。</p>
+        <h2 id="sec-4" tabindex="-1">坑二：灰度 10% 看不出差异，因为没有对照组</h2>
+        <p>后来我想做灰度：v4 只放 10% 的流量，稳定了再全量。第一轮跑了一周，我觉得「看起来没什么区别」，准备全量。回头一算才发现我根本没设对照组——那 10% 的请求量只有 40 条左右，而摘要长度的自然波动就有 ±30%，40 条样本的均值差异完全淹没在噪声里。真正让我判断出差异的，是按 <code>prompt_version</code> 分组比对同一批文件：拿 30 份文件分别用 v3 和 v4 各跑一次，逐字段对比，才看出 v4 在 <code>risks</code> 上更容易漏项。灰度不是发出去看天，是要有能算出差别的样本量。</p>
+        <h2 id="sec-5" tabindex="-1">坑三：模板变量漂移，模型自己把缺失的字段编了出来</h2>
+        <p>注册表化之后模板里开始有占位变量，比如 <code>{part_no}</code>、<code>{process_text}</code>。有次上游传了空字符串，模板变成「零件号：，工艺内容：xxx」，模型没有报错，而是自己补了一个看起来合理的零件号。<strong>变量缺失必须在渲染前拦截，不能指望模型发现。</strong>我在 <code>render()</code> 里加了必填校验，缺任何一个直接抛异常并记录到日志，宁可这条摘要生成失败，也不要一条编造了零件号的摘要流到概览页上。</p>
+        <h2 id="sec-6" tabindex="-1">结论</h2>
+        <p>现在我的习惯是：任何要进生产的 prompt，第一件事不是调措辞，而是给它一个版本号和一条记录。听起来像流程负担，实际上它把三类问题一次解决了——出事能定位到具体版本、回滚是一个数字的事、效果对比有分组依据。<strong>Prompt 长得像代码里的字符串，但它的生命周期更像配置：会被改、会被回滚、需要灰度、必须留痕。当成字符串管理，就只能靠记忆和运气。</strong></p>
+      </div><nav class="article-nav"><a class="post-nav-item" href="rerank-latency-tradeoff.html"><span>← 更新一篇</span><strong>加了 rerank 后 MRR 从 0.51 涨到 0.78，延迟也涨到 620ms：这买卖怎么算</strong></a><a class="post-nav-item" href="eval-set-recall.html"><span>更旧一篇 →</span><strong>我给 AI 检索建了套 60 题评测集，才发现「优化见效」全是自我感觉</strong></a></nav><div class="article-nav"><a class="back-link" href="../blog.html">← 返回全部文章</a></div><section class="related-posts"><h2> related / 相关阅读</h2><div class="related-grid"><a href="summarization-map-reduce.html"><span>2026年11月24日</span><strong>180 份日报汇总成一页月报：refine 跑了 9 分钟，层级 map-reduce 只要 63 秒</strong></a><a href="finetune-or-fewshot.html"><span>2026年11月24日</span><strong>为了抽工艺参数我差点微调 7B：8 个 few-shot 样本把完整率从 71% 拉到 92%</strong></a><a href="token-billing-dashboard.html"><span>2026年11月23日</span><strong>一个月 1200 块的 AI 账单我全靠猜：装了 token 计费看板，当月降了 38%</strong></a></div></section></article><aside class="toc toc-side" id="toc-side" aria-label="文章目录"><p class="toc-title">目录 / CONTENTS</p><ul class="toc-list"><li><a href="posts/prompt-version-registry.html#sec-0" data-toc="sec-0">事故现场：一句「请简洁一点」，200 份摘要全变样</a></li><li><a href="posts/prompt-version-registry.html#sec-1" data-toc="sec-1">拆出来：一个 prompt 一个文件，版本号写在文件名里</a></li><li><a href="posts/prompt-version-registry.html#sec-2" data-toc="sec-2">三件事必须落到库里：prompt 版本、模型、参数</a></li><li><a href="posts/prompt-version-registry.html#sec-3" data-toc="sec-3">坑一：缓存 key 里没带版本号，回滚后命中的还是坏结果</a></li><li><a href="posts/prompt-version-registry.html#sec-4" data-toc="sec-4">坑二：灰度 10% 看不出差异，因为没有对照组</a></li><li><a href="posts/prompt-version-registry.html#sec-5" data-toc="sec-5">坑三：模板变量漂移，模型自己把缺失的字段编了出来</a></li><li><a href="posts/prompt-version-registry.html#sec-6" data-toc="sec-6">结论</a></li></ul></aside></div></main>
+  <div id="site-footer"><footer class="site-footer"><div class="container footer-inner"><p>© 2026 JIE · 由原生 HTML/CSS/JS 强力驱动</p><div class="footer-links"><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="https://github.com/justin-yu-space" target="_blank" rel="noopener">GitHub</a><a href="feed.xml">RSS</a><button type="button" data-search-open>搜索</button></div></div></footer></div>
+  <div id="search-root"></div>
+  <script src="assets/data/site.js"></script>
+  <script src="assets/data/text.js"></script>
+  <script src="assets/js/components.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>

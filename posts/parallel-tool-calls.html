@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <base href="../" />
+  <title>让模型一次调 4 个工具：我把周报生成从 11 秒压到 3 秒，也踩了并发的坑 · JIE 的技术博客</title>
+  <meta name="description" content="四个查询互相没依赖，为什么要一个等一个？改成并发后确实快了 3 倍多，但限流、竞态、部分失败三个坑，比串行慢更让人头疼。" />
+  <link rel="canonical" href="https://justin-yu-space.github.io/my-tech-blog/posts/parallel-tool-calls.html" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="JIE 的技术博客" />
+  <meta property="og:title" content="让模型一次调 4 个工具：我把周报生成从 11 秒压到 3 秒，也踩了并发的坑 · JIE 的技术博客" />
+  <meta property="og:description" content="四个查询互相没依赖，为什么要一个等一个？改成并发后确实快了 3 倍多，但限流、竞态、部分失败三个坑，比串行慢更让人头疼。" />
+  <meta property="og:url" content="https://justin-yu-space.github.io/my-tech-blog/posts/parallel-tool-calls.html" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="theme-color" content="#a8435f" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <script>(function(){var t="light";try{var d=matchMedia("(prefers-color-scheme: dark)").matches;t=localStorage.getItem("theme-v2")||(d?"dark":"light")}catch(e){}document.documentElement.dataset.theme=t})();</script>
+  <script>(function(){try{if(sessionStorage.getItem("jie-dissolve")==="1"){sessionStorage.removeItem("jie-dissolve");document.documentElement.classList.add("pre-dissolve")}}catch(e){}})();</script>
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body data-page="post">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <div id="site-header"><header class="site-header"><div class="container nav-inner"><a href="index.html" class="brand" aria-label="JIE 的技术博客 首页"><span class="brand-full">JIE 的技术博客</span><span class="brand-short">JIE</span></a><nav class="nav-links" aria-label="主导航"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a></nav><div class="nav-actions"><button type="button" class="icon-btn search-trigger" data-search-open aria-label="搜索文章">🔍</button><button type="button" class="icon-btn theme-trigger" data-theme-toggle aria-label="切换深浅主题">◐</button><button type="button" class="icon-btn menu-trigger" data-menu-toggle aria-label="打开菜单" aria-expanded="false">☰</button></div></div><div class="mobile-menu" id="mobile-menu"><div class="container" style="padding-bottom:16px"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="#" data-search-open>搜索文章</a><a href="#" data-theme-toggle>切换深浅主题</a></div></div></header></div>
+  <main id="main"><div class="article-shell"><article class="article"><p class="label-mono accent">// 技术分享</p><h1>让模型一次调 4 个工具：我把周报生成从 11 秒压到 3 秒，也踩了并发的坑</h1><div class="article-meta"><time datetime="2026-11-20">2026年11月20日</time><span>·</span><span>约 9 分钟</span><a class="tag" href="tags.html?tag=AI">#AI</a><a class="tag" href="tags.html?tag=Agent">#Agent</a><a class="tag" href="tags.html?tag=%E5%AE%9E%E8%B7%B5">#实践</a></div><details class="toc-inline"><summary>本文目录</summary><ul class="toc-list"><li><a href="posts/parallel-tool-calls.html#sec-0" data-toc="sec-0">从串行到并发：让模型一次返回多个工具调用</a></li><li><a href="posts/parallel-tool-calls.html#sec-1" data-toc="sec-1">并发执行：线程池 + 信号量限流</a></li><li><a href="posts/parallel-tool-calls.html#sec-2" data-toc="sec-2">坑二：共享上下文的竞态</a></li><li><a href="posts/parallel-tool-calls.html#sec-3" data-toc="sec-3">坑三：一个工具失败，整份周报全废</a></li><li><a href="posts/parallel-tool-calls.html#sec-4" data-toc="sec-4">数字与结论</a></li></ul></details><div class="article-body">
+        <p>工作日报系统有个功能：点「生成周报」，助手要依次查四个数据源——日报库、项目进度、考勤、待办清单，然后汇总成一份周报。四个查询串行跑，每个 2~3 秒，用户要盯着转圈圈等 11 秒。我盯着那段 for 循环想：这四个查询互相没有依赖，为什么要一个等一个？改成并发之后确实压到了 3 秒，但并发带来的坑，比串行慢更让人头疼。</p>
+        <h2 id="sec-0" tabindex="-1">从串行到并发：让模型一次返回多个工具调用</h2>
+        <p>关键一步是让模型在一次回复里返回多个 tool_call。以前我一次只让它调一个工具，拿结果再问下一轮，天然串行。现在我在工具定义里加上「如果需要多项数据，请一次性调用所有相关工具」，模型就会在一个 assistant 消息里给出 4 个 function call，每个带自己的 arguments。</p>
+        <pre><code>resp = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=messages,
+    tools=TOOLS,
+    tool_choice="auto"     # 关键：允许一次返回多个
+)
+calls = resp.choices[0].message.tool_calls
+print(len(calls))          # 常见是 3~4 个
+# 每个 call: {id, function: {name, arguments}}</code></pre>
+        <h2 id="sec-1" tabindex="-1">并发执行：线程池 + 信号量限流</h2>
+        <p>拿到 4 个调用后，我用线程池并发执行，同时用信号量把并发数压到 3——因为下游 file-manager 的查询接口有连接数限制，放开了打会直接被拒。这里踩了第一个坑：我一开始把并发设成 4（和工具数一样），下游接口返回了一串 <code>429 Too Many Requests</code>，而模型侧完全正常——限流发生在我自己的业务接口，不在大模型网关。</p>
+        <pre><code>from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+
+sem = threading.Semaphore(3)          # 下游接口最大并发
+
+def run_call(call):
+    with sem:
+        return call.id, safe_execute(call)
+
+results = {}
+with ThreadPoolExecutor(max_workers=4) as pool:
+    futures = [pool.submit(run_call, c) for c in calls]
+    for f in as_completed(futures):
+        cid, val = f.result()
+        results[cid] = val             # 按 id 收集，不依赖完成顺序</code></pre>
+        <h2 id="sec-2" tabindex="-1">坑二：共享上下文的竞态</h2>
+        <p>我的第一版把一个共享的 <code>context</code> 字典传给所有线程，每个工具往里塞结果。四个线程同时写，出现了丢键和脏数据——周报里偶尔少一块内容，重跑又正常。这种 bug 最恶心，因为它偶发。<strong>并发执行的第一原则：不要共享可变状态。</strong>改成每个工具返回自己的结果、主线程按 call id 汇总后，这类问题彻底消失。</p>
+        <h2 id="sec-3" tabindex="-1">坑三：一个工具失败，整份周报全废</h2>
+        <p>并发之后失败处理也变了。串行时某个查询失败，我直接中断重来；并发时四个已经在飞，一个失败不能拖垮其他三个。我改成「部分成功」策略：每个工具内部自带重试和降级——重试 2 次仍失败就返回一个带 <code>degraded: true</code> 标记的占位数据，同时在周报末尾列出「哪些数据源没查到」。这样用户拿到的是一份标注清楚的周报，而不是一个空白页。代价是要处理「部分数据」的展示逻辑，多写了几十行，但比全盘失败友好得多。</p>
+        <h2 id="sec-4" tabindex="-1">数字与结论</h2>
+        <p>最终效果：四个查询串行 11.2 秒，并发后 3.1 秒（受限于下游接口的 3 并发上限，否则能到 2.8 秒），提速约 3.6 倍。工具调用本身的模型开销几乎没变——省的全是等待时间。<strong>并发工具调用提速的本质，是把「等待 I/O」从串行变成重叠，而不是让模型变聪明。</strong>但它把复杂度转移到了工程侧：限流、竞态、部分失败，一个都不能少。我现在的原则是：无依赖的查询才并发，并发数看下游最薄弱的环节，共享状态一律不碰，失败按部分成功兜底。</p>
+      </div><nav class="article-nav"><a class="post-nav-item" href="eval-set-recall.html"><span>← 更新一篇</span><strong>我给 AI 检索建了套 60 题评测集，才发现「优化见效」全是自我感觉</strong></a><a class="post-nav-item" href="grounded-citation.html"><span>更旧一篇 →</span><strong>让 RAG 回答逐句带出处：我把幻觉率从 18% 压到 3%</strong></a></nav><div class="article-nav"><a class="back-link" href="../blog.html">← 返回全部文章</a></div><section class="related-posts"><h2> related / 相关阅读</h2><div class="related-grid"><a href="summarization-map-reduce.html"><span>2026年11月24日</span><strong>180 份日报汇总成一页月报：refine 跑了 9 分钟，层级 map-reduce 只要 63 秒</strong></a><a href="finetune-or-fewshot.html"><span>2026年11月24日</span><strong>为了抽工艺参数我差点微调 7B：8 个 few-shot 样本把完整率从 71% 拉到 92%</strong></a><a href="token-billing-dashboard.html"><span>2026年11月23日</span><strong>一个月 1200 块的 AI 账单我全靠猜：装了 token 计费看板，当月降了 38%</strong></a></div></section></article><aside class="toc toc-side" id="toc-side" aria-label="文章目录"><p class="toc-title">目录 / CONTENTS</p><ul class="toc-list"><li><a href="posts/parallel-tool-calls.html#sec-0" data-toc="sec-0">从串行到并发：让模型一次返回多个工具调用</a></li><li><a href="posts/parallel-tool-calls.html#sec-1" data-toc="sec-1">并发执行：线程池 + 信号量限流</a></li><li><a href="posts/parallel-tool-calls.html#sec-2" data-toc="sec-2">坑二：共享上下文的竞态</a></li><li><a href="posts/parallel-tool-calls.html#sec-3" data-toc="sec-3">坑三：一个工具失败，整份周报全废</a></li><li><a href="posts/parallel-tool-calls.html#sec-4" data-toc="sec-4">数字与结论</a></li></ul></aside></div></main>
+  <div id="site-footer"><footer class="site-footer"><div class="container footer-inner"><p>© 2026 JIE · 由原生 HTML/CSS/JS 强力驱动</p><div class="footer-links"><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="https://github.com/justin-yu-space" target="_blank" rel="noopener">GitHub</a><a href="feed.xml">RSS</a><button type="button" data-search-open>搜索</button></div></div></footer></div>
+  <div id="search-root"></div>
+  <script src="assets/data/site.js"></script>
+  <script src="assets/data/text.js"></script>
+  <script src="assets/js/components.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>

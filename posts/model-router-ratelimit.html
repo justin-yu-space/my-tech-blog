@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <base href="../" />
+  <title>主模型半夜返回 429，我的 AI 摘要全线崩了：加了模型路由 + 退避后可用性到 99.7% · JIE 的技术博客</title>
+  <meta name="description" content="我们只接了一家模型厂商，它一限流整个摘要功能就瘫。按任务难度分级路由、主备切换、指数退避加 jitter——三个月把可用性从 98% 拉到 99.7%，也踩了一串坑。" />
+  <link rel="canonical" href="https://justin-yu-space.github.io/my-tech-blog/posts/model-router-ratelimit.html" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="JIE 的技术博客" />
+  <meta property="og:title" content="主模型半夜返回 429，我的 AI 摘要全线崩了：加了模型路由 + 退避后可用性到 99.7% · JIE 的技术博客" />
+  <meta property="og:description" content="我们只接了一家模型厂商，它一限流整个摘要功能就瘫。按任务难度分级路由、主备切换、指数退避加 jitter——三个月把可用性从 98% 拉到 99.7%，也踩了一串坑。" />
+  <meta property="og:url" content="https://justin-yu-space.github.io/my-tech-blog/posts/model-router-ratelimit.html" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="theme-color" content="#a8435f" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <script>(function(){var t="light";try{var d=matchMedia("(prefers-color-scheme: dark)").matches;t=localStorage.getItem("theme-v2")||(d?"dark":"light")}catch(e){}document.documentElement.dataset.theme=t})();</script>
+  <script>(function(){try{if(sessionStorage.getItem("jie-dissolve")==="1"){sessionStorage.removeItem("jie-dissolve");document.documentElement.classList.add("pre-dissolve")}}catch(e){}})();</script>
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body data-page="post">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <div id="site-header"><header class="site-header"><div class="container nav-inner"><a href="index.html" class="brand" aria-label="JIE 的技术博客 首页"><span class="brand-full">JIE 的技术博客</span><span class="brand-short">JIE</span></a><nav class="nav-links" aria-label="主导航"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a></nav><div class="nav-actions"><button type="button" class="icon-btn search-trigger" data-search-open aria-label="搜索文章">🔍</button><button type="button" class="icon-btn theme-trigger" data-theme-toggle aria-label="切换深浅主题">◐</button><button type="button" class="icon-btn menu-trigger" data-menu-toggle aria-label="打开菜单" aria-expanded="false">☰</button></div></div><div class="mobile-menu" id="mobile-menu"><div class="container" style="padding-bottom:16px"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="#" data-search-open>搜索文章</a><a href="#" data-theme-toggle>切换深浅主题</a></div></div></header></div>
+  <main id="main"><div class="article-shell"><article class="article"><p class="label-mono accent">// 技术分享</p><h1>主模型半夜返回 429，我的 AI 摘要全线崩了：加了模型路由 + 退避后可用性到 99.7%</h1><div class="article-meta"><time datetime="2026-11-23">2026年11月23日</time><span>·</span><span>约 10 分钟</span><a class="tag" href="tags.html?tag=AI">#AI</a><a class="tag" href="tags.html?tag=%E5%A4%9A%E6%A8%A1%E5%9E%8B%E8%B7%AF%E7%94%B1">#多模型路由</a><a class="tag" href="tags.html?tag=%E5%AE%9E%E8%B7%B5">#实践</a></div><details class="toc-inline"><summary>本文目录</summary><ul class="toc-list"><li><a href="posts/model-router-ratelimit.html#sec-0" data-toc="sec-0">不是所有任务都配用大模型</a></li><li><a href="posts/model-router-ratelimit.html#sec-1" data-toc="sec-1">坑一：没有 jitter 的退避造成惊群</a></li><li><a href="posts/model-router-ratelimit.html#sec-2" data-toc="sec-2">坑二：降级了却不告诉用户</a></li><li><a href="posts/model-router-ratelimit.html#sec-3" data-toc="sec-3">坑三：把 400 当成 429 去重试</a></li><li><a href="posts/model-router-ratelimit.html#sec-4" data-toc="sec-4">结论</a></li></ul></details><div class="article-body">
+        <p>有天凌晨两点，NPI 系统的工艺卡摘要全线报 <code>429 Too Many Requests</code>。我们只接了一家模型厂商，它那边一限流，整个摘要功能就瘫了，而工艺员第二天一早要量产评审。那次事故之后我做了两件事：按任务难度分级路由到不同模型，以及给调用加上主备切换和指数退避。改完跑了三个月，可用性从大概 98% 提到 99.7%，也踩了一串坑。</p>
+        <h2 id="sec-0" tabindex="-1">不是所有任务都配用大模型</h2>
+        <p>我先统计了两个月的调用：60% 的请求其实是简单任务——判断一封邮件是否紧急、给文件打标签、抽取一个零件号。这些用一个小模型就能做，速度和成本都只有大模型的零头。于是我把请求分三级：<code>light</code>（分类/抽取）走便宜小模型，<code>standard</code>（摘要/问答）走主力模型，<code>heavy</code>（复杂推理）才上最强模型。分级之后整体成本降了一半，简单任务的延迟从 800ms 降到 200ms。</p>
+        <pre><code>import time, random
+
+def call_with_fallback(task, tier):
+    candidates = ROUTE[tier]          # 按优先级排列的模型列表
+    last_err = None
+    for i, model in enumerate(candidates):
+        try:
+            return client.chat(model=model, **task)
+        except RateLimitError as e:
+            last_err = e
+            if i == len(candidates) - 1:
+                break
+            # 指数退避 + jitter，避免惊群
+            time.sleep(min(2 ** i, 8) + random.uniform(0, 0.5))
+    raise last_err</code></pre>
+        <h2 id="sec-1" tabindex="-1">坑一：没有 jitter 的退避造成惊群</h2>
+        <p>第一版退避是纯 <code>2 ** i</code>，没加随机抖动。结果整点时所有实例同时被限流、同时睡 1 秒、同时重试，又同时被打回来——我们自己做了一个「分布式同步攻击」。加上 <code>random.uniform(0, 0.5)</code> 的 jitter 之后，重试请求被打散，恢复速度快了好几倍。这是分布式系统里很经典的坑，我第一次在自己代码里亲眼见到。</p>
+        <h2 id="sec-2" tabindex="-1">坑二：降级了却不告诉用户</h2>
+        <p>主模型挂了自动切到备用模型，看起来很美好，但备用模型能力弱一档，输出质量悄悄下降。有次用户拿着摘要去做评审，事后发现备用模型漏了关键参数。现在的做法是：每次响应都带上实际使用的 <code>model</code> 和 <code>degraded</code> 标志，前端在降级时用一个小角标提示「当前为备用模型」，让用户自己判断要不要信。降级不是把问题藏起来，是把选择权交还给用户。</p>
+        <h2 id="sec-3" tabindex="-1">坑三：把 400 当成 429 去重试</h2>
+        <p>有次参数写错，模型一直返回 400，我的代码把它归类为可重试错误，退避重试了四次，次次都返回 400——白烧了四次请求的钱和时间。后来我把错误分成三类：<code>429/503</code> 这类瞬时错误才重试，<code>400/401</code> 这类客户端错误直接抛，<code>5xx</code> 里的服务端错误有限重试。重试策略必须按错误码分类，一刀切只会放大问题。</p>
+        <h2 id="sec-4" tabindex="-1">结论</h2>
+        <p>多模型路由的本质是承认「单一依赖必然失败」。<strong>分级路由省钱降延迟，主备切换扛住单点故障，而退避、jitter、错误分类这些细节才决定它在真实故障里到底靠不靠谱</strong>。三个月稳定运行后我最大的体会是：容灾代码平时看不出价值，但它值的就是那一次凌晨两点的 429。现在每次设计 AI 调用，我都会先问一句「这家挂了怎么办」。</p>
+      </div><nav class="article-nav"><a class="post-nav-item" href="token-billing-dashboard.html"><span>← 更新一篇</span><strong>一个月 1200 块的 AI 账单我全靠猜：装了 token 计费看板，当月降了 38%</strong></a><a class="post-nav-item" href="rerank-latency-tradeoff.html"><span>更旧一篇 →</span><strong>加了 rerank 后 MRR 从 0.51 涨到 0.78，延迟也涨到 620ms：这买卖怎么算</strong></a></nav><div class="article-nav"><a class="back-link" href="../blog.html">← 返回全部文章</a></div><section class="related-posts"><h2> related / 相关阅读</h2><div class="related-grid"><a href="summarization-map-reduce.html"><span>2026年11月24日</span><strong>180 份日报汇总成一页月报：refine 跑了 9 分钟，层级 map-reduce 只要 63 秒</strong></a><a href="finetune-or-fewshot.html"><span>2026年11月24日</span><strong>为了抽工艺参数我差点微调 7B：8 个 few-shot 样本把完整率从 71% 拉到 92%</strong></a><a href="token-billing-dashboard.html"><span>2026年11月23日</span><strong>一个月 1200 块的 AI 账单我全靠猜：装了 token 计费看板，当月降了 38%</strong></a></div></section></article><aside class="toc toc-side" id="toc-side" aria-label="文章目录"><p class="toc-title">目录 / CONTENTS</p><ul class="toc-list"><li><a href="posts/model-router-ratelimit.html#sec-0" data-toc="sec-0">不是所有任务都配用大模型</a></li><li><a href="posts/model-router-ratelimit.html#sec-1" data-toc="sec-1">坑一：没有 jitter 的退避造成惊群</a></li><li><a href="posts/model-router-ratelimit.html#sec-2" data-toc="sec-2">坑二：降级了却不告诉用户</a></li><li><a href="posts/model-router-ratelimit.html#sec-3" data-toc="sec-3">坑三：把 400 当成 429 去重试</a></li><li><a href="posts/model-router-ratelimit.html#sec-4" data-toc="sec-4">结论</a></li></ul></aside></div></main>
+  <div id="site-footer"><footer class="site-footer"><div class="container footer-inner"><p>© 2026 JIE · 由原生 HTML/CSS/JS 强力驱动</p><div class="footer-links"><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="https://github.com/justin-yu-space" target="_blank" rel="noopener">GitHub</a><a href="feed.xml">RSS</a><button type="button" data-search-open>搜索</button></div></div></footer></div>
+  <div id="search-root"></div>
+  <script src="assets/data/site.js"></script>
+  <script src="assets/data/text.js"></script>
+  <script src="assets/js/components.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>

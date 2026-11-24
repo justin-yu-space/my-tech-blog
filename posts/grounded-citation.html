@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <base href="../" />
+  <title>让 RAG 回答逐句带出处：我把幻觉率从 18% 压到 3% · JIE 的技术博客</title>
+  <meta name="description" content="模型答得头头是道，却把 A 机型的扭矩安到了 B 机型上。我要求每个句子必须由程序绑定真实原文、找不到出处就标红，幻觉率从 18% 降到 3%，代价是 12% 的句子没人敢拍板。" />
+  <link rel="canonical" href="https://justin-yu-space.github.io/my-tech-blog/posts/grounded-citation.html" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="JIE 的技术博客" />
+  <meta property="og:title" content="让 RAG 回答逐句带出处：我把幻觉率从 18% 压到 3% · JIE 的技术博客" />
+  <meta property="og:description" content="模型答得头头是道，却把 A 机型的扭矩安到了 B 机型上。我要求每个句子必须由程序绑定真实原文、找不到出处就标红，幻觉率从 18% 降到 3%，代价是 12% 的句子没人敢拍板。" />
+  <meta property="og:url" content="https://justin-yu-space.github.io/my-tech-blog/posts/grounded-citation.html" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="theme-color" content="#a8435f" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <script>(function(){var t="light";try{var d=matchMedia("(prefers-color-scheme: dark)").matches;t=localStorage.getItem("theme-v2")||(d?"dark":"light")}catch(e){}document.documentElement.dataset.theme=t})();</script>
+  <script>(function(){try{if(sessionStorage.getItem("jie-dissolve")==="1"){sessionStorage.removeItem("jie-dissolve");document.documentElement.classList.add("pre-dissolve")}}catch(e){}})();</script>
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body data-page="post">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <div id="site-header"><header class="site-header"><div class="container nav-inner"><a href="index.html" class="brand" aria-label="JIE 的技术博客 首页"><span class="brand-full">JIE 的技术博客</span><span class="brand-short">JIE</span></a><nav class="nav-links" aria-label="主导航"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a></nav><div class="nav-actions"><button type="button" class="icon-btn search-trigger" data-search-open aria-label="搜索文章">🔍</button><button type="button" class="icon-btn theme-trigger" data-theme-toggle aria-label="切换深浅主题">◐</button><button type="button" class="icon-btn menu-trigger" data-menu-toggle aria-label="打开菜单" aria-expanded="false">☰</button></div></div><div class="mobile-menu" id="mobile-menu"><div class="container" style="padding-bottom:16px"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="#" data-search-open>搜索文章</a><a href="#" data-theme-toggle>切换深浅主题</a></div></div></header></div>
+  <main id="main"><div class="article-shell"><article class="article"><p class="label-mono accent">// 技术分享</p><h1>让 RAG 回答逐句带出处：我把幻觉率从 18% 压到 3%</h1><div class="article-meta"><time datetime="2026-11-19">2026年11月19日</time><span>·</span><span>约 10 分钟</span><a class="tag" href="tags.html?tag=AI">#AI</a><a class="tag" href="tags.html?tag=%E5%B9%BB%E8%A7%89%E6%8A%91%E5%88%B6">#幻觉抑制</a><a class="tag" href="tags.html?tag=%E5%AE%9E%E8%B7%B5">#实践</a></div><details class="toc-inline"><summary>本文目录</summary><ul class="toc-list"><li><a href="posts/grounded-citation.html#sec-0" data-toc="sec-0">为什么「来自 XX 文档」这句话不可信</a></li><li><a href="posts/grounded-citation.html#sec-1" data-toc="sec-1">改成「逐句锚定」，让程序来判出处</a></li><li><a href="posts/grounded-citation.html#sec-2" data-toc="sec-2">阈值 0.82 是怎么试出来的</a></li><li><a href="posts/grounded-citation.html#sec-3" data-toc="sec-3">踩坑：无出处的句子怎么处理</a></li><li><a href="posts/grounded-citation.html#sec-4" data-toc="sec-4">结论</a></li></ul></details><div class="article-body">
+        <p>上周差点酿成事故：同事在 NPI 系统里问「某零件的拧紧扭矩标准是多少」，助手答得头头是道，还标注「来自工艺规范文档」。他照着写进了工艺卡——那是另一个机型的参数。模型没瞎编，那段数字确实躺在我的知识库里，只是被安错了出处。这次之后，我给 RAG 加了一道「引用溯源」闸门：每个句子必须绑定一段真实原文，找不到出处就宁可说不知道。</p>
+        <h2 id="sec-0" tabindex="-1">为什么「来自 XX 文档」这句话不可信</h2>
+        <p>我最初的做法是让模型在答案末尾附上来源，比如「以上来自《工艺规范 v3》第 12 页」。听着靠谱，但我抽查了 50 条回答，发现 9 条的出处是模型编的——文档名对、页码却是瞎写的，或者数字来自 A 段却被说成 B 段。<strong>让模型自己报告出处，等于让它给自己的答案盖章，本质上还是幻觉。</strong>溯源必须由程序来判，不能交给生成环节。</p>
+        <h2 id="sec-1" tabindex="-1">改成「逐句锚定」，让程序来判出处</h2>
+        <p>新流程分两步：先检索候选片段，让模型只依据片段作答、并给每句标上所用片段编号；再由程序把答案拆成句子，逐句和候选片段做自然语言推理（NLI）判断蕴含关系，取最高分作为该句出处。只有分数过阈值的句子才保留出处标记。</p>
+        <pre><code>def grounded_answer(question, hits, llm, nli, min_score=0.82):
+    lines = []
+    for i, (text, doc_id, page) in enumerate(hits):
+        lines.append("[" + str(i) + "] " + text)
+    ctx = chr(10).join(lines)
+    draft = llm("只依据片段回答，逐句标注编号：" + ctx + " 问：" + question)
+    cited = []
+    for s in split_sentences(draft):
+        best = max(hits, key=lambda h: nli.entailment(s, h[0]))
+        score, doc_id, page = best[0], best[1], best[2]
+        cited.append({"text": s, "source": doc_id if score &gt;= min_score else None,
+                      "page": page, "score": round(score, 2)})
+    dropped = [c for c in cited if c["source"] is None]
+    verdict = "partial" if dropped else "ok"
+    return {"answer": cited, "verdict": verdict, "dropped": len(dropped)}</code></pre>
+        <h2 id="sec-2" tabindex="-1">阈值 0.82 是怎么试出来的</h2>
+        <p>我拿 60 条有标准答案的工艺问题做评测。阈值 0.70 时，出处正确率只有 76%——模型把相似但不同的机型参数也判成了出处。提到 0.82，出处正确率升到 94%，但 12% 的句子因为找不到足够匹配的片段被标成「无出处」。再往上到 0.90，正确率几乎不涨，「无出处」却涨到 21%，答案变得支离破碎。<strong>0.82 是准确率与可用性的平衡点。</strong></p>
+        <h2 id="sec-3" tabindex="-1">踩坑：无出处的句子怎么处理</h2>
+        <p>第一版我把无出处的句子直接删掉，结果答案经常读不通——被删的恰恰是承上启下的连接句。改成保留句子、但打上「【未找到依据】」标记并在前端高亮，让用户自己判断。另外发现 NLI 模型对数字极不敏感：「扭矩 45N·m」和「扭矩 54N·m」的蕴含分数几乎一样。我补了一条硬规则——答案里的数字必须能在绑定片段里原样找到，否则强制标无出处。就这一条，把数字类幻觉又砍掉一半。</p>
+        <h2 id="sec-4" tabindex="-1">结论</h2>
+        <p>上线一个月，抽查幻觉率从 18% 降到 3%，代价是约 12% 的句子被标为无出处、需要人工复核。<strong>引用溯源的本质不是让模型更诚实，而是把「这句话有没有依据」从模型的自由裁量，变成程序可验证的判断。</strong>模型负责生成，程序负责举证——分工清楚了，幻觉才压得住。同一套思路也能搬到工作日报系统里自动生成的周报：凡是涉及数字和结论，都得能指回原始记录。</p>
+      </div><nav class="article-nav"><a class="post-nav-item" href="parallel-tool-calls.html"><span>← 更新一篇</span><strong>让模型一次调 4 个工具：我把周报生成从 11 秒压到 3 秒，也踩了并发的坑</strong></a><a class="post-nav-item" href="llm-tracing.html"><span>更旧一篇 →</span><strong>给每一次 AI 调用装上行车记录仪：我用 trace ID 揪出了烧 token 的元凶</strong></a></nav><div class="article-nav"><a class="back-link" href="../blog.html">← 返回全部文章</a></div><section class="related-posts"><h2> related / 相关阅读</h2><div class="related-grid"><a href="summarization-map-reduce.html"><span>2026年11月24日</span><strong>180 份日报汇总成一页月报：refine 跑了 9 分钟，层级 map-reduce 只要 63 秒</strong></a><a href="finetune-or-fewshot.html"><span>2026年11月24日</span><strong>为了抽工艺参数我差点微调 7B：8 个 few-shot 样本把完整率从 71% 拉到 92%</strong></a><a href="token-billing-dashboard.html"><span>2026年11月23日</span><strong>一个月 1200 块的 AI 账单我全靠猜：装了 token 计费看板，当月降了 38%</strong></a></div></section></article><aside class="toc toc-side" id="toc-side" aria-label="文章目录"><p class="toc-title">目录 / CONTENTS</p><ul class="toc-list"><li><a href="posts/grounded-citation.html#sec-0" data-toc="sec-0">为什么「来自 XX 文档」这句话不可信</a></li><li><a href="posts/grounded-citation.html#sec-1" data-toc="sec-1">改成「逐句锚定」，让程序来判出处</a></li><li><a href="posts/grounded-citation.html#sec-2" data-toc="sec-2">阈值 0.82 是怎么试出来的</a></li><li><a href="posts/grounded-citation.html#sec-3" data-toc="sec-3">踩坑：无出处的句子怎么处理</a></li><li><a href="posts/grounded-citation.html#sec-4" data-toc="sec-4">结论</a></li></ul></aside></div></main>
+  <div id="site-footer"><footer class="site-footer"><div class="container footer-inner"><p>© 2026 JIE · 由原生 HTML/CSS/JS 强力驱动</p><div class="footer-links"><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="https://github.com/justin-yu-space" target="_blank" rel="noopener">GitHub</a><a href="feed.xml">RSS</a><button type="button" data-search-open>搜索</button></div></div></footer></div>
+  <div id="search-root"></div>
+  <script src="assets/data/site.js"></script>
+  <script src="assets/data/text.js"></script>
+  <script src="assets/js/components.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>

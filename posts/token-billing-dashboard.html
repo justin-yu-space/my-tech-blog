@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <base href="../" />
+  <title>一个月 1200 块的 AI 账单我全靠猜：装了 token 计费看板，当月降了 38% · JIE 的技术博客</title>
+  <meta name="description" content="AI 调用从每月 80 块涨到 1200 块，我却拆不出钱烧在哪个功能上。用官方 tokenizer 精确计数、输入输出分开计价后，才发现 60% 的成本来自一个我早忘了的实验功能。" />
+  <link rel="canonical" href="https://justin-yu-space.github.io/my-tech-blog/posts/token-billing-dashboard.html" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="JIE 的技术博客" />
+  <meta property="og:title" content="一个月 1200 块的 AI 账单我全靠猜：装了 token 计费看板，当月降了 38% · JIE 的技术博客" />
+  <meta property="og:description" content="AI 调用从每月 80 块涨到 1200 块，我却拆不出钱烧在哪个功能上。用官方 tokenizer 精确计数、输入输出分开计价后，才发现 60% 的成本来自一个我早忘了的实验功能。" />
+  <meta property="og:url" content="https://justin-yu-space.github.io/my-tech-blog/posts/token-billing-dashboard.html" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="theme-color" content="#a8435f" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <script>(function(){var t="light";try{var d=matchMedia("(prefers-color-scheme: dark)").matches;t=localStorage.getItem("theme-v2")||(d?"dark":"light")}catch(e){}document.documentElement.dataset.theme=t})();</script>
+  <script>(function(){try{if(sessionStorage.getItem("jie-dissolve")==="1"){sessionStorage.removeItem("jie-dissolve");document.documentElement.classList.add("pre-dissolve")}}catch(e){}})();</script>
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body data-page="post">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <div id="site-header"><header class="site-header"><div class="container nav-inner"><a href="index.html" class="brand" aria-label="JIE 的技术博客 首页"><span class="brand-full">JIE 的技术博客</span><span class="brand-short">JIE</span></a><nav class="nav-links" aria-label="主导航"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a></nav><div class="nav-actions"><button type="button" class="icon-btn search-trigger" data-search-open aria-label="搜索文章">🔍</button><button type="button" class="icon-btn theme-trigger" data-theme-toggle aria-label="切换深浅主题">◐</button><button type="button" class="icon-btn menu-trigger" data-menu-toggle aria-label="打开菜单" aria-expanded="false">☰</button></div></div><div class="mobile-menu" id="mobile-menu"><div class="container" style="padding-bottom:16px"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="#" data-search-open>搜索文章</a><a href="#" data-theme-toggle>切换深浅主题</a></div></div></header></div>
+  <main id="main"><div class="article-shell"><article class="article"><p class="label-mono accent">// 技术分享</p><h1>一个月 1200 块的 AI 账单我全靠猜：装了 token 计费看板，当月降了 38%</h1><div class="article-meta"><time datetime="2026-11-23">2026年11月23日</time><span>·</span><span>约 9 分钟</span><a class="tag" href="tags.html?tag=AI">#AI</a><a class="tag" href="tags.html?tag=%E6%88%90%E6%9C%AC%E6%A0%B8%E7%AE%97">#成本核算</a><a class="tag" href="tags.html?tag=%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0">#学习笔记</a></div><details class="toc-inline"><summary>本文目录</summary><ul class="toc-list"><li><a href="posts/token-billing-dashboard.html#sec-0" data-toc="sec-0">先纠正一个错误：token 不是「字数除以四」</a></li><li><a href="posts/token-billing-dashboard.html#sec-1" data-toc="sec-1">输入和输出不等价，别只看总 token</a></li><li><a href="posts/token-billing-dashboard.html#sec-2" data-toc="sec-2">把成本打到业务维度上</a></li><li><a href="posts/token-billing-dashboard.html#sec-3" data-toc="sec-3">踩过的坑</a></li><li><a href="posts/token-billing-dashboard.html#sec-4" data-toc="sec-4">结论</a></li></ul></details><div class="article-body">
+        <p>工作日报系统上线三个月后，老板问我一个问题：「这个月 AI 花了 1200 块，哪个功能烧的？」我答不上来。我只知道调用了大模型 API，账单从最初的 80 块涨到 1200 块，但拆不开——是按部门分的？是摘要功能还是问答功能？有没有哪次死循环把 token 烧光了？那次之后我给系统装了一套 token 计费看板，第一次把「花了多少钱」变成按功能、按部门、按用户可查的数字，当月账单降了 38%。</p>
+        <h2 id="sec-0" tabindex="-1">先纠正一个错误：token 不是「字数除以四」</h2>
+        <p>我最早的成本估算函数是 <code>len(text)/4</code>，这在英文上大致成立，在中文上错得离谱。我用 tiktoken 对比了 500 条真实工艺卡文本：<code>cl100k_base</code> 编码下，一个中文字符平均约 1.5 个 token，有些生僻的零件号甚至一个字三个 token。按除以四估算，我把实际用量低估了 60%——难怪账单总是比我算的高。后来我改成用官方 tokenizer 在发送前精确计数：</p>
+        <pre><code>import tiktoken
+
+enc = tiktoken.get_encoding("cl100k_base")
+
+def count_tokens(text: str) -&gt; int:
+    return len(enc.encode(text, disallowed_special=()))
+
+# 输出 token 单价通常是输入的 3~4 倍，必须分开记
+PRICE_IN  = 0.0008   # 元 / 千 token（示例档位）
+PRICE_OUT = 0.002
+
+def cost(prompt: str, completion: str) -&gt; float:
+    tin = count_tokens(prompt)
+    tout = count_tokens(completion)
+    return tin / 1000 * PRICE_IN + tout / 1000 * PRICE_OUT</code></pre>
+        <h2 id="sec-1" tabindex="-1">输入和输出不等价，别只看总 token</h2>
+        <p>第二个认知纠正是输入输出价格不对称。我们的摘要功能一次输入 3000 token 工艺卡、输出 300 token 摘要，看起来输出只占 9%，但输出单价是输入的 2.5 倍，实际成本占比接近 43%。早期我按总 token 均摊成本，得出的结论是「摘要很便宜」，完全误导了优化方向——真正该压的是输出端的啰嗦提示，而不是输入端的检索长度。</p>
+        <h2 id="sec-2" tabindex="-1">把成本打到业务维度上</h2>
+        <p>精确计数只是基础，关键是给每次调用打上业务标签。我在调用入口统一封装，强制传 <code>dept</code>、<code>feature</code>、<code>user_id</code> 三个字段，随 trace 一起写入 SQLite 的 <code>token_log</code> 表。这样月底那句「哪个功能烧的」就变成一条 group by 查询。看板出来后发现：60% 的成本来自一个我早忘了的「全库问答」实验功能，它每次把 20 个文件全塞进上下文。砍掉之后当月账单直接降了 38%。</p>
+        <h2 id="sec-3" tabindex="-1">踩过的坑</h2>
+        <p>坑一：流式输出的 token 数拿不到。SDK 流式模式下 <code>usage</code> 字段只在最后一个 chunk 里返回，我一开始每个 chunk 都去读 <code>usage</code>，前面全是 <code>null</code>，把计数全记成了 0。正确做法是累积 chunk 到最后一块，从 final chunk 里取 usage。坑二：缓存命中重复计费。语义缓存命中时根本没调模型，但我的日志在调用前就记了账，导致缓存命中也被算钱。改成「只在真实收到 API 响应后记账」才对。坑三：失败的重试请求也要算钱——有些错误是模型已经生成了一半才断连，token 照烧，不能因为请求失败就不记。</p>
+        <h2 id="sec-4" tabindex="-1">结论</h2>
+        <p>这套看板给我的最大收获不是省钱，而是建立起「AI 调用是有单位成本的工程资源」这个直觉。<strong>token 计数要用官方 tokenizer，输入输出分开计价，成本必须能归因到业务维度</strong>——做不到这三点，你就是在用信仰管钱。现在每次新功能上线，我都会先看它的单次调用成本，再决定要不要上。省下来的 38% 是结果，真正值钱的是「我知道钱去哪了」。</p>
+      </div><nav class="article-nav"><a class="post-nav-item" href="finetune-or-fewshot.html"><span>← 更新一篇</span><strong>为了抽工艺参数我差点微调 7B：8 个 few-shot 样本把完整率从 71% 拉到 92%</strong></a><a class="post-nav-item" href="model-router-ratelimit.html"><span>更旧一篇 →</span><strong>主模型半夜返回 429，我的 AI 摘要全线崩了：加了模型路由 + 退避后可用性到 99.7%</strong></a></nav><div class="article-nav"><a class="back-link" href="../blog.html">← 返回全部文章</a></div><section class="related-posts"><h2> related / 相关阅读</h2><div class="related-grid"><a href="summarization-map-reduce.html"><span>2026年11月24日</span><strong>180 份日报汇总成一页月报：refine 跑了 9 分钟，层级 map-reduce 只要 63 秒</strong></a><a href="finetune-or-fewshot.html"><span>2026年11月24日</span><strong>为了抽工艺参数我差点微调 7B：8 个 few-shot 样本把完整率从 71% 拉到 92%</strong></a><a href="model-router-ratelimit.html"><span>2026年11月23日</span><strong>主模型半夜返回 429，我的 AI 摘要全线崩了：加了模型路由 + 退避后可用性到 99.7%</strong></a></div></section></article><aside class="toc toc-side" id="toc-side" aria-label="文章目录"><p class="toc-title">目录 / CONTENTS</p><ul class="toc-list"><li><a href="posts/token-billing-dashboard.html#sec-0" data-toc="sec-0">先纠正一个错误：token 不是「字数除以四」</a></li><li><a href="posts/token-billing-dashboard.html#sec-1" data-toc="sec-1">输入和输出不等价，别只看总 token</a></li><li><a href="posts/token-billing-dashboard.html#sec-2" data-toc="sec-2">把成本打到业务维度上</a></li><li><a href="posts/token-billing-dashboard.html#sec-3" data-toc="sec-3">踩过的坑</a></li><li><a href="posts/token-billing-dashboard.html#sec-4" data-toc="sec-4">结论</a></li></ul></aside></div></main>
+  <div id="site-footer"><footer class="site-footer"><div class="container footer-inner"><p>© 2026 JIE · 由原生 HTML/CSS/JS 强力驱动</p><div class="footer-links"><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="https://github.com/justin-yu-space" target="_blank" rel="noopener">GitHub</a><a href="feed.xml">RSS</a><button type="button" data-search-open>搜索</button></div></div></footer></div>
+  <div id="search-root"></div>
+  <script src="assets/data/site.js"></script>
+  <script src="assets/data/text.js"></script>
+  <script src="assets/js/components.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>

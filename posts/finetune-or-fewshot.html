@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <base href="../" />
+  <title>为了抽工艺参数我差点微调 7B：8 个 few-shot 样本把完整率从 71% 拉到 92% · JIE 的技术博客</title>
+  <meta name="description" content="字段漏抽被我误判成「模型不懂工艺黑话」，直到对照实验显示 few-shot 只差微调 2 个百分点，却省下 10 小时标注。问题卡在输出粒度，不在知识。" />
+  <link rel="canonical" href="https://justin-yu-space.github.io/my-tech-blog/posts/finetune-or-fewshot.html" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="JIE 的技术博客" />
+  <meta property="og:title" content="为了抽工艺参数我差点微调 7B：8 个 few-shot 样本把完整率从 71% 拉到 92% · JIE 的技术博客" />
+  <meta property="og:description" content="字段漏抽被我误判成「模型不懂工艺黑话」，直到对照实验显示 few-shot 只差微调 2 个百分点，却省下 10 小时标注。问题卡在输出粒度，不在知识。" />
+  <meta property="og:url" content="https://justin-yu-space.github.io/my-tech-blog/posts/finetune-or-fewshot.html" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="theme-color" content="#a8435f" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <script>(function(){var t="light";try{var d=matchMedia("(prefers-color-scheme: dark)").matches;t=localStorage.getItem("theme-v2")||(d?"dark":"light")}catch(e){}document.documentElement.dataset.theme=t})();</script>
+  <script>(function(){try{if(sessionStorage.getItem("jie-dissolve")==="1"){sessionStorage.removeItem("jie-dissolve");document.documentElement.classList.add("pre-dissolve")}}catch(e){}})();</script>
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body data-page="post">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <div id="site-header"><header class="site-header"><div class="container nav-inner"><a href="index.html" class="brand" aria-label="JIE 的技术博客 首页"><span class="brand-full">JIE 的技术博客</span><span class="brand-short">JIE</span></a><nav class="nav-links" aria-label="主导航"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a></nav><div class="nav-actions"><button type="button" class="icon-btn search-trigger" data-search-open aria-label="搜索文章">🔍</button><button type="button" class="icon-btn theme-trigger" data-theme-toggle aria-label="切换深浅主题">◐</button><button type="button" class="icon-btn menu-trigger" data-menu-toggle aria-label="打开菜单" aria-expanded="false">☰</button></div></div><div class="mobile-menu" id="mobile-menu"><div class="container" style="padding-bottom:16px"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="#" data-search-open>搜索文章</a><a href="#" data-theme-toggle>切换深浅主题</a></div></div></header></div>
+  <main id="main"><div class="article-shell"><article class="article"><p class="label-mono accent">// 技术分享</p><h1>为了抽工艺参数我差点微调 7B：8 个 few-shot 样本把完整率从 71% 拉到 92%</h1><div class="article-meta"><time datetime="2026-11-24">2026年11月24日</time><span>·</span><span>约 10 分钟</span><a class="tag" href="tags.html?tag=AI">#AI</a><a class="tag" href="tags.html?tag=%E5%BE%AE%E8%B0%83">#微调</a><a class="tag" href="tags.html?tag=%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0">#学习笔记</a></div><details class="toc-inline"><summary>本文目录</summary><ul class="toc-list"><li><a href="posts/finetune-or-fewshot.html#sec-0" data-toc="sec-0">我先算了一笔账</a></li><li><a href="posts/finetune-or-fewshot.html#sec-1" data-toc="sec-1">对照实验：四组，结果出乎意料</a></li><li><a href="posts/finetune-or-fewshot.html#sec-2" data-toc="sec-2">为什么 few-shot 能补上这 21 个百分点</a></li><li><a href="posts/finetune-or-fewshot.html#sec-3" data-toc="sec-3">踩过的坑</a></li><li><a href="posts/finetune-or-fewshot.html#sec-4" data-toc="sec-4">什么时候我会真的去微调</a></li><li><a href="posts/finetune-or-fewshot.html#sec-5" data-toc="sec-5">结论</a></li></ul></details><div class="article-body">
+        <p>NPI 系统里有个功能：读工艺卡文本，抽出工序、关键参数和风险点，存进结构化字段。上线后字段完整率一直在 71% 左右徘徊——十份工艺卡有三份会漏掉关键参数。我盯着那些漏抽的样本看了半天，得出一个很专业的结论：通用模型不懂我们的工艺黑话，得微调。我甚至已经列好了 200 条标注计划、准备租 GPU。幸好动手前先做了一次对照实验，最后没微调，用 8 个样例把完整率提到了 92%。这两天的「差点踩坑」值得记下来。</p>
+        <h2 id="sec-0" tabindex="-1">我先算了一笔账</h2>
+        <p>微调的账不能只算 GPU 钱。标注 200 条工艺卡，每条人工读加填字段约 3 分钟，是 10 小时；LoRA 微调一个 7B 模型，单卡 A10 跑 3 个 epoch 约 2 小时，机器成本约 ¥12；上线后还要维护模型版本、做评测回归、处理领域漂移。<strong>真正贵的是标注和长期维护，不是训练。</strong>而我们要解决的问题只是漏字段——这是指令遵循问题，不是知识缺失问题。这两个问题的解法根本不一样。</p>
+        <h2 id="sec-1" tabindex="-1">对照实验：四组，结果出乎意料</h2>
+        <p>我拿 50 份有人工标注的工艺卡做评测，四组跑同一批数据：① 裸 prompt（「抽出工序、参数、风险」）字段完整率 71%；② 加 JSON Schema 约束到 80%；③ 加 8 个 few-shot 样例到 92%；④ LoRA 微调 7B 到 94%。第三组和第四组只差 2 个百分点，但第三组花了我 40 分钟挑样例，第四组花了 10 小时标注。</p>
+        <pre><code># few-shot 样例库：按零件类型分组，检索时动态挑选
+FEWSHOTS = {
+    "钣金": [
+        {"input": "...", "output": {"process": "...", "key_params": [], "risks": []}},
+        # ... 共 3 个
+    ],
+    "注塑": [ ... ],
+    "机加": [ ... ],
+}
+
+def build_messages(part_type, card_text):
+    shots = FEWSHOTS[part_type][:3]       # 同类 3 个即可，多了反而稀释
+    msgs = [{"role": "system", "content": SYSTEM + SCHEMA_HINT}]
+    for s in shots:
+        msgs += [{"role": "user", "content": s["input"]},
+                 {"role": "assistant", "content": json.dumps(s["output"], ensure_ascii=False)}]
+    msgs.append({"role": "user", "content": card_text})
+    return msgs</code></pre>
+        <h2 id="sec-2" tabindex="-1">为什么 few-shot 能补上这 21 个百分点</h2>
+        <p>我逐条看了裸 prompt 漏抽的样本，发现模型不是不认识参数，而是不知道<strong>粒度</strong>——「扭矩 45±5 N·m」它只抽「扭矩」，「首件检验 3 件」它整个丢掉。few-shot 样例真正教给模型的是什么叫一个参数：连数值、公差、单位一起保留，检验类步骤也算关键参数。这种隐性规则用文字解释很啰嗦，三个例子一次说清。这也是我认为微调不划算的深层原因：我们要迁移的不是领域知识，是输出粒度偏好。</p>
+        <h2 id="sec-3" tabindex="-1">踩过的坑</h2>
+        <p>坑一：样例里出现真实零件号，模型照抄。第一版样例我直接从生产数据里摘，带着 <code>X374X</code> 这样的真实编号，结果有的输出把样例里的编号写进了新工单，改成全部脱敏（<code>PART-A</code> 之类）后才干净。坑二：样例顺序有偏差。我发现把「钣金」样例放在最前，模型对注塑卡也倾向于输出钣金的参数格式，解决办法是按零件类型动态选样例、每次固定 3 个同类样例。坑三：样例太多反而变差。我试过塞 12 个样例，完整率从 92% 掉到 86%——示例把上下文吃掉了，真正的工艺卡被挤到后面。三个样例是甜点，再多就是噪声。</p>
+        <h2 id="sec-4" tabindex="-1">什么时候我会真的去微调</h2>
+        <p>这次没微调，不代表微调没用。我给自己定了三条触发线：<strong>一是任务依赖大量专属知识</strong>，few-shot 塞不下，比如要把整套企业标准内化；<strong>二是调用量极大且延迟敏感</strong>，小模型微调后本地部署的单次成本是大模型调用的三十分之一，量起来能回本——按我们的量算每天 200 次调用，微调用三年都回不了本；<strong>三是输出风格高度固定</strong>，few-shot 压不住。三条都不满足，就老老实实写 prompt。</p>
+        <h2 id="sec-5" tabindex="-1">结论</h2>
+        <p>把这次的结论写成一句话：<strong>先穷尽 prompt、schema 和 few-shot，再考虑微调</strong>。微调解决的是「模型不知道」，而更多时候模型是「知道但没按你要的粒度输出」。那 2 个百分点的差距不值得 10 小时标注——但如果哪天日调用量涨两个数量级，或者要把整套国标内化进模型，我会毫不犹豫地回去做微调。<strong>取舍不是「微调高级、prompt 低级」，而是看你的问题到底卡在知识还是卡在表达。</strong></p>
+      </div><nav class="article-nav"><a class="post-nav-item" href="summarization-map-reduce.html"><span>← 更新一篇</span><strong>180 份日报汇总成一页月报：refine 跑了 9 分钟，层级 map-reduce 只要 63 秒</strong></a><a class="post-nav-item" href="token-billing-dashboard.html"><span>更旧一篇 →</span><strong>一个月 1200 块的 AI 账单我全靠猜：装了 token 计费看板，当月降了 38%</strong></a></nav><div class="article-nav"><a class="back-link" href="../blog.html">← 返回全部文章</a></div><section class="related-posts"><h2> related / 相关阅读</h2><div class="related-grid"><a href="summarization-map-reduce.html"><span>2026年11月24日</span><strong>180 份日报汇总成一页月报：refine 跑了 9 分钟，层级 map-reduce 只要 63 秒</strong></a><a href="token-billing-dashboard.html"><span>2026年11月23日</span><strong>一个月 1200 块的 AI 账单我全靠猜：装了 token 计费看板，当月降了 38%</strong></a><a href="model-router-ratelimit.html"><span>2026年11月23日</span><strong>主模型半夜返回 429，我的 AI 摘要全线崩了：加了模型路由 + 退避后可用性到 99.7%</strong></a></div></section></article><aside class="toc toc-side" id="toc-side" aria-label="文章目录"><p class="toc-title">目录 / CONTENTS</p><ul class="toc-list"><li><a href="posts/finetune-or-fewshot.html#sec-0" data-toc="sec-0">我先算了一笔账</a></li><li><a href="posts/finetune-or-fewshot.html#sec-1" data-toc="sec-1">对照实验：四组，结果出乎意料</a></li><li><a href="posts/finetune-or-fewshot.html#sec-2" data-toc="sec-2">为什么 few-shot 能补上这 21 个百分点</a></li><li><a href="posts/finetune-or-fewshot.html#sec-3" data-toc="sec-3">踩过的坑</a></li><li><a href="posts/finetune-or-fewshot.html#sec-4" data-toc="sec-4">什么时候我会真的去微调</a></li><li><a href="posts/finetune-or-fewshot.html#sec-5" data-toc="sec-5">结论</a></li></ul></aside></div></main>
+  <div id="site-footer"><footer class="site-footer"><div class="container footer-inner"><p>© 2026 JIE · 由原生 HTML/CSS/JS 强力驱动</p><div class="footer-links"><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="https://github.com/justin-yu-space" target="_blank" rel="noopener">GitHub</a><a href="feed.xml">RSS</a><button type="button" data-search-open>搜索</button></div></div></footer></div>
+  <div id="search-root"></div>
+  <script src="assets/data/site.js"></script>
+  <script src="assets/data/text.js"></script>
+  <script src="assets/js/components.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>

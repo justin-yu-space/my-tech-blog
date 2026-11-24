@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <base href="../" />
+  <title>加了 rerank 后 MRR 从 0.51 涨到 0.78，延迟也涨到 620ms：这买卖怎么算 · JIE 的技术博客</title>
+  <meta name="description" content="重排让「第一条就是想要的」从 51% 提到 78%，代价是 P95 延迟翻了三倍多。我一度想省掉召回直接让 reranker 干活，结果准确率反而掉了。" />
+  <link rel="canonical" href="https://justin-yu-space.github.io/my-tech-blog/posts/rerank-latency-tradeoff.html" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="JIE 的技术博客" />
+  <meta property="og:title" content="加了 rerank 后 MRR 从 0.51 涨到 0.78，延迟也涨到 620ms：这买卖怎么算 · JIE 的技术博客" />
+  <meta property="og:description" content="重排让「第一条就是想要的」从 51% 提到 78%，代价是 P95 延迟翻了三倍多。我一度想省掉召回直接让 reranker 干活，结果准确率反而掉了。" />
+  <meta property="og:url" content="https://justin-yu-space.github.io/my-tech-blog/posts/rerank-latency-tradeoff.html" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="theme-color" content="#a8435f" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <script>(function(){var t="light";try{var d=matchMedia("(prefers-color-scheme: dark)").matches;t=localStorage.getItem("theme-v2")||(d?"dark":"light")}catch(e){}document.documentElement.dataset.theme=t})();</script>
+  <script>(function(){try{if(sessionStorage.getItem("jie-dissolve")==="1"){sessionStorage.removeItem("jie-dissolve");document.documentElement.classList.add("pre-dissolve")}}catch(e){}})();</script>
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body data-page="post">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <div id="site-header"><header class="site-header"><div class="container nav-inner"><a href="index.html" class="brand" aria-label="JIE 的技术博客 首页"><span class="brand-full">JIE 的技术博客</span><span class="brand-short">JIE</span></a><nav class="nav-links" aria-label="主导航"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a></nav><div class="nav-actions"><button type="button" class="icon-btn search-trigger" data-search-open aria-label="搜索文章">🔍</button><button type="button" class="icon-btn theme-trigger" data-theme-toggle aria-label="切换深浅主题">◐</button><button type="button" class="icon-btn menu-trigger" data-menu-toggle aria-label="打开菜单" aria-expanded="false">☰</button></div></div><div class="mobile-menu" id="mobile-menu"><div class="container" style="padding-bottom:16px"><a href="index.html">首页</a><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="#" data-search-open>搜索文章</a><a href="#" data-theme-toggle>切换深浅主题</a></div></div></header></div>
+  <main id="main"><div class="article-shell"><article class="article"><p class="label-mono accent">// 技术分享</p><h1>加了 rerank 后 MRR 从 0.51 涨到 0.78，延迟也涨到 620ms：这买卖怎么算</h1><div class="article-meta"><time datetime="2026-11-23">2026年11月23日</time><span>·</span><span>约 9 分钟</span><a class="tag" href="tags.html?tag=AI">#AI</a><a class="tag" href="tags.html?tag=%E6%A3%80%E7%B4%A2">#检索</a><a class="tag" href="tags.html?tag=%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0">#学习笔记</a></div><details class="toc-inline"><summary>本文目录</summary><ul class="toc-list"><li><a href="posts/rerank-latency-tradeoff.html#sec-0" data-toc="sec-0">先确认病灶：召回没问题，排序有问题</a></li><li><a href="posts/rerank-latency-tradeoff.html#sec-1" data-toc="sec-1">接一层重排：召回 50，重排 12</a></li><li><a href="posts/rerank-latency-tradeoff.html#sec-2" data-toc="sec-2">数字：排序变好了，延迟也变贵了</a></li><li><a href="posts/rerank-latency-tradeoff.html#sec-3" data-toc="sec-3">坑一：我想省掉召回，让 reranker 直接干活</a></li><li><a href="posts/rerank-latency-tradeoff.html#sec-4" data-toc="sec-4">坑二：512 token 截断，把关键段落切掉了</a></li><li><a href="posts/rerank-latency-tradeoff.html#sec-5" data-toc="sec-5">坑三：超时没设，一个慢请求拖死整个搜索</a></li><li><a href="posts/rerank-latency-tradeoff.html#sec-6" data-toc="sec-6">结论</a></li></ul></details><div class="article-body">
+        <p>file-manager 的搜索框一直有个说不清的毛病：用户输入「2026 预算 汇总」，正确的那份 Excel 明明在库里，但排在第七条。点开前三条都是名字沾边的旧文件。召回阶段它确实被找出来了——问题不在「找没找到」，而在「排得对不对」。这就是 rerank 该上场的地方，也是我第一次真切感受到「召回」和「排序」是两个完全不同的活儿。</p>
+        <h2 id="sec-0" tabindex="-1">先确认病灶：召回没问题，排序有问题</h2>
+        <p>我用 40 题的评测集量了一遍：recall@50 是 96%，意思是 50 条候选里几乎总有正确文件；但 recall@5 只有 62%，MRR 0.51。三个数字摆在一起，结论很清楚——向量检索把相关文档捞上来了，只是没把它放到前面。原因是 embedding 把整段文本压成一个向量，长文档里真正关键的那句「2026 年度预算汇总表」被稀释了，而文件名里带「预算」两个字的旧文件反而更像。</p>
+        <h2 id="sec-1" tabindex="-1">接一层重排：召回 50，重排 12</h2>
+        <p>做法很标准：向量召回 50 条，把这 50 条原文（不是向量）连同 query 一起送进 reranker，让它逐条打分，取前 12 条交给下游。reranker 是 cross-encoder，query 和文档拼在一起进模型，能看到「预算」和「汇总」在文档里到底出现在哪个位置、什么上下文——这是双塔 embedding 结构上做不到的。</p>
+        <pre><code>import requests
+
+def rerank(query, docs, top_n=12):
+    resp = requests.post(
+        "https://api.example.com/v1/rerank",
+        headers={"Authorization": "Bearer " + API_KEY},
+        json={
+            "model": "bge-reranker-v2-m3",
+            "query": query,
+            "documents": [d["text"] for d in docs],
+            "top_n": top_n,
+        },
+        timeout=1.5,          # 必须设，见下面的坑
+    )
+    resp.raise_for_status()
+    data = resp.json()["results"]      # [{index, relevance_score}, ...]
+    return [(docs[r["index"]], r["relevance_score"]) for r in data]</code></pre>
+        <h2 id="sec-2" tabindex="-1">数字：排序变好了，延迟也变贵了</h2>
+        <p>同一套 40 题跑下来：recall@5 从 62% 升到 79%，MRR 从 0.51 升到 0.78，最直观的用户感受是「第一条就对」的比例从一半出头涨到接近八成。代价是延迟：只走向量检索时 P95 是 180ms，加上 rerank 变成 620ms，翻了 3.4 倍。50 条候选送进 cross-encoder，计算量是按「条数 × 长度」线性涨的，这一步没有便宜的办法。</p>
+        <h2 id="sec-3" tabindex="-1">坑一：我想省掉召回，让 reranker 直接干活</h2>
+        <p>第一个念头很自然：既然 reranker 排得准，那干脆别向量召回了，把库里文件全丢给它排。试了一次就被打回——文档上千条，一次请求直接超时，而且 reranker 的分数只在「给定这批候选」内部有相对意义，它不做召回，只做排序。更阴险的是第二个错误：我为了省延迟，只把向量召回的 top5 送进 rerank。结果 MRR 反而掉到 0.49——因为候选池太小，正确文件本来排第 7，压根没进 rerank 的输入。<strong>rerank 只能在召回给的池子里挑，池子不够大，它连翻身的机会都没有。</strong>我的经验值是：召回 40~60 条，重排取 10~15 条。</p>
+        <h2 id="sec-4" tabindex="-1">坑二：512 token 截断，把关键段落切掉了</h2>
+        <p>上线后有一类文档始终排不准——都是超过 3000 字的长文档。查了半天发现 reranker 的输入上限是 512 token，超了直接截断，被截掉的正好是后半段的正文。我的修法是「按段落切块送排」：一篇长文档拆成 3 个块分别打分，取最高分作为该文档的分数，同时把命中块的位置记下来，便于前端高亮。这一改，长文档那 9 道题的 MRR 从 0.41 提到 0.72。</p>
+        <h2 id="sec-5" tabindex="-1">坑三：超时没设，一个慢请求拖死整个搜索</h2>
+        <p>rerank 是外部调用，我第一版忘了设 timeout。某次网关抖动，单次请求卡了 8 秒，用户的搜索框就一直转圈。<strong>重排必须当成「可能失败的可选增强」，而不是主链路。</strong>现在的策略是 1.5 秒超时，超时或报错就直接用向量检索的原始顺序返回，页面上不做任何提示——用户拿到的是「稍差一点但很快」的结果，而不是一个错误页。实测这条降级路径的触发率约 0.7%，但它是搜索框可用性的保险。</p>
+        <h2 id="sec-6" tabindex="-1">结论</h2>
+        <p>这笔买卖到底值不值，取决于你的场景能不能吃掉 400ms。内部文件管理这种「一次搜索看十秒」的场景，我认为值：MRR 从 0.51 到 0.78 带来的效率提升，远大于多等半秒的烦躁。但如果是对接 C 端搜索框、要求 200ms 内出结果，我会改用更小的 reranker 或者只对前 20 条重排。<strong>rerank 不是「更准的检索」，它是用延迟换排序质量的一道明码标价的交易，先想清楚你的延迟预算，再决定买多少。</strong></p>
+      </div><nav class="article-nav"><a class="post-nav-item" href="model-router-ratelimit.html"><span>← 更新一篇</span><strong>主模型半夜返回 429，我的 AI 摘要全线崩了：加了模型路由 + 退避后可用性到 99.7%</strong></a><a class="post-nav-item" href="prompt-version-registry.html"><span>更旧一篇 →</span><strong>把 Prompt 从代码里搬出来后，我第一次能回答「上周那批摘要到底是谁生成的」</strong></a></nav><div class="article-nav"><a class="back-link" href="../blog.html">← 返回全部文章</a></div><section class="related-posts"><h2> related / 相关阅读</h2><div class="related-grid"><a href="summarization-map-reduce.html"><span>2026年11月24日</span><strong>180 份日报汇总成一页月报：refine 跑了 9 分钟，层级 map-reduce 只要 63 秒</strong></a><a href="finetune-or-fewshot.html"><span>2026年11月24日</span><strong>为了抽工艺参数我差点微调 7B：8 个 few-shot 样本把完整率从 71% 拉到 92%</strong></a><a href="token-billing-dashboard.html"><span>2026年11月23日</span><strong>一个月 1200 块的 AI 账单我全靠猜：装了 token 计费看板，当月降了 38%</strong></a></div></section></article><aside class="toc toc-side" id="toc-side" aria-label="文章目录"><p class="toc-title">目录 / CONTENTS</p><ul class="toc-list"><li><a href="posts/rerank-latency-tradeoff.html#sec-0" data-toc="sec-0">先确认病灶：召回没问题，排序有问题</a></li><li><a href="posts/rerank-latency-tradeoff.html#sec-1" data-toc="sec-1">接一层重排：召回 50，重排 12</a></li><li><a href="posts/rerank-latency-tradeoff.html#sec-2" data-toc="sec-2">数字：排序变好了，延迟也变贵了</a></li><li><a href="posts/rerank-latency-tradeoff.html#sec-3" data-toc="sec-3">坑一：我想省掉召回，让 reranker 直接干活</a></li><li><a href="posts/rerank-latency-tradeoff.html#sec-4" data-toc="sec-4">坑二：512 token 截断，把关键段落切掉了</a></li><li><a href="posts/rerank-latency-tradeoff.html#sec-5" data-toc="sec-5">坑三：超时没设，一个慢请求拖死整个搜索</a></li><li><a href="posts/rerank-latency-tradeoff.html#sec-6" data-toc="sec-6">结论</a></li></ul></aside></div></main>
+  <div id="site-footer"><footer class="site-footer"><div class="container footer-inner"><p>© 2026 JIE · 由原生 HTML/CSS/JS 强力驱动</p><div class="footer-links"><a href="blog.html">博客</a><a href="projects.html">项目</a><a href="tags.html">标签</a><a href="archive.html">归档</a><a href="about.html">关于</a><a href="https://github.com/justin-yu-space" target="_blank" rel="noopener">GitHub</a><a href="feed.xml">RSS</a><button type="button" data-search-open>搜索</button></div></div></footer></div>
+  <div id="search-root"></div>
+  <script src="assets/data/site.js"></script>
+  <script src="assets/data/text.js"></script>
+  <script src="assets/js/components.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>
